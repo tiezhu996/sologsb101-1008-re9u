@@ -136,6 +136,9 @@ const SEED_BUILDINGS: BuildingRow[] = [
   { id: 'bd-1', stationId: 'st-1', name: '3号楼', areaM2: 4800, floors: 11, units: 2, heatMode: '地暖', createdAt: stamp(-290), updatedAt: stamp(-2), revision: ROW_REVISION },
   { id: 'bd-2', stationId: 'st-1', name: '5号楼', areaM2: 5200, floors: 12, units: 2, heatMode: '散热器', createdAt: stamp(-289), updatedAt: stamp(-2), revision: ROW_REVISION },
   { id: 'bd-3', stationId: 'st-1', name: '7号楼', areaM2: 4100, floors: 9, units: 1, heatMode: '地暖', createdAt: stamp(-288), updatedAt: stamp(-3), revision: ROW_REVISION },
+  { id: 'bd-6', stationId: 'st-1', name: '9号楼（扩建）', areaM2: 3000, floors: 11, units: 1, heatMode: '散热器', createdAt: stamp(-120), updatedAt: stamp(0), revision: ROW_REVISION },
+  { id: 'bd-7', stationId: 'st-1', name: '11号楼（待接阀）', areaM2: 2600, floors: 10, units: 1, heatMode: '地暖', createdAt: stamp(-90), updatedAt: stamp(0), revision: ROW_REVISION },
+  { id: 'bd-8', stationId: 'st-2', name: '配套用房', areaM2: 0, floors: 2, units: 1, heatMode: '散热器', createdAt: stamp(-80), updatedAt: stamp(0), revision: ROW_REVISION },
   { id: 'bd-4', stationId: 'st-2', name: 'A座', areaM2: 6800, floors: 15, units: 3, heatMode: '散热器', createdAt: stamp(-270), updatedAt: stamp(-1), revision: ROW_REVISION },
   { id: 'bd-5', stationId: 'st-2', name: 'B座', areaM2: 5900, floors: 14, units: 2, heatMode: '地暖', createdAt: stamp(-269), updatedAt: stamp(-1), revision: ROW_REVISION }
 ]
@@ -150,7 +153,12 @@ const SEED_VALVES: ValveRow[] = [
   { id: 'vv-7', buildingId: 'bd-4', stationId: 'st-2', code: 'BL-A-01', dn: 80, currentOpening: 85, designFlowM3h: 48, position: '楼栋总阀', createdAt: stamp(-260), updatedAt: stamp(-1), revision: ROW_REVISION },
   { id: 'vv-8', buildingId: 'bd-4', stationId: 'st-2', code: 'BL-A-02', dn: 50, currentOpening: 70, designFlowM3h: 22, position: '单元立管', createdAt: stamp(-260), updatedAt: stamp(-1), revision: ROW_REVISION },
   { id: 'vv-9', buildingId: 'bd-5', stationId: 'st-2', code: 'BL-B-01', dn: 65, currentOpening: 50, designFlowM3h: 30, position: '楼栋总阀', createdAt: stamp(-259), updatedAt: stamp(-1), revision: ROW_REVISION },
-  { id: 'vv-10', buildingId: 'bd-5', stationId: 'st-2', code: 'BL-B-02', dn: 50, currentOpening: 30, designFlowM3h: 18, position: '单元立管', createdAt: stamp(-259), updatedAt: stamp(-1), revision: ROW_REVISION }
+  { id: 'vv-10', buildingId: 'bd-5', stationId: 'st-2', code: 'BL-B-02', dn: 50, currentOpening: 30, designFlowM3h: 18, position: '单元立管', createdAt: stamp(-259), updatedAt: stamp(-1), revision: ROW_REVISION },
+  // 9号楼（扩建）：扩容后阀门按现场口径登记，合计明显超出按面积分摊的站能力
+  { id: 'vv-11', buildingId: 'bd-6', stationId: 'st-1', code: 'BL-9-01', dn: 100, currentOpening: 70, designFlowM3h: 120, position: '楼栋总阀', createdAt: stamp(-100), updatedAt: stamp(0), revision: ROW_REVISION },
+  { id: 'vv-12', buildingId: 'bd-6', stationId: 'st-1', code: 'BL-9-02', dn: 80, currentOpening: 65, designFlowM3h: 60, position: '单元立管', createdAt: stamp(-100), updatedAt: stamp(0), revision: ROW_REVISION },
+  // 配套用房：建筑面积为零，不参与分摊，但阀门作为现场参数保留
+  { id: 'vv-13', buildingId: 'bd-8', stationId: 'st-2', code: 'BL-MT-01', dn: 40, currentOpening: 40, designFlowM3h: 6, position: '楼栋总阀', createdAt: stamp(-60), updatedAt: stamp(0), revision: ROW_REVISION }
 ]
 
 function mkMeasure(

@@ -14,6 +14,9 @@ import { useStationStore } from '@/stores/stationStore'
 import { useValveStore } from '@/stores/valveStore'
 import { useAdjustStore } from '@/stores/adjustStore'
 import { useImbalanceRank } from '@/hooks/useImbalanceRank'
+import { useCapacityCheck } from '@/hooks/useCapacityCheck'
+import { CAPACITY_TAG_THEME, excessPct } from '@/utils/capacity'
+import type { BuildingCapacityCheck, CapacityStatus, StationCapacityCheck } from '@/types/capacity'
 import {
   EMPTY_BUILDING_DRAFT,
   HEAT_MODES,
@@ -30,6 +33,8 @@ const stationStore = useStationStore()
 const valveStore = useValveStore()
 const adjustStore = useAdjustStore()
 const rank = useImbalanceRank()
+const capacity = useCapacityCheck()
+const { stationChecks, checkOf, buildingCheckOf, overBuildingCount } = capacity
 
 /* ------------------------------ 派生 ------------------------------ */
 
@@ -53,11 +58,52 @@ const stationColumns = [
   { colKey: 'units', title: '单元数', width: 90 },
   { colKey: 'heatMode', title: '供热方式', width: 110, cell: 'heatModeCell' },
   { colKey: 'valveCount', title: '阀门数', width: 90, cell: 'valveCountCell' },
+  { colKey: 'capacity', title: '容量校核', width: 200, cell: 'capacityCell' },
   { colKey: 'op', title: '操作', width: 220, cell: 'opCell' }
 ]
 
 function stationRowKey(row: Building): string {
   return row.id
+}
+
+/* ---------------------------- 容量校核展示 ---------------------------- */
+
+const capacityColumns = [
+  { colKey: 'buildingName', title: '楼栋', width: 150 },
+  { colKey: 'area', title: '建筑面积', width: 110, cell: 'capacityAreaCell' },
+  { colKey: 'areaSharePct', title: '面积占比', width: 100, cell: 'capacityShareCell' },
+  { colKey: 'allocated', title: '分摊站流量', width: 120, cell: 'capacityAllocatedCell' },
+  { colKey: 'valve', title: '阀门合计', width: 110, cell: 'capacityValveCell' },
+  { colKey: 'excess', title: '超配量', width: 120, cell: 'capacityExcessCell' },
+  { colKey: 'status', title: '结论', width: 100, cell: 'capacityStatusCell' },
+  { colKey: 'skipReason', title: '说明', cell: 'capacityReasonCell' }
+]
+
+function capacityRowKey(row: BuildingCapacityCheck): string {
+  return row.buildingId
+}
+
+function capacityRowClassName(row: BuildingCapacityCheck): string {
+  return row.participating ? '' : 'capacity-row--skip'
+}
+
+function capacityTheme(status: CapacityStatus | null): 'danger' | 'primary' | 'success' | 'default' {
+  return status ? CAPACITY_TAG_THEME[status] : 'default'
+}
+
+function flowText(value: number): string {
+  return Number.isFinite(value) ? value.toFixed(1) : '—'
+}
+
+/** 超配量带正负号展示 */
+function excessText(value: number): string {
+  if (!Number.isFinite(value)) return '—'
+  return `${value > 0 ? '+' : ''}${value.toFixed(1)}`
+}
+
+/** 未参与分摊楼栋下的阀门合计（全量口径与参与口径的差额说明用） */
+function skippedValveTotal(check: StationCapacityCheck): number {
+  return check.rows.filter((row) => !row.participating).reduce((sum, row) => sum + row.valveTotalM3h, 0)
 }
 
 /* ------------------------------ 筛选 ------------------------------ */
@@ -256,6 +302,12 @@ function goValves(stationId: string): void {
         suffix="只"
         tone="danger"
       />
+      <StatBadge
+        label="容量超配楼栋"
+        :value="overBuildingCount"
+        suffix="栋"
+        tone="warning"
+      />
     </div>
 
     <FilterBar
@@ -299,6 +351,31 @@ function goValves(stationId: string): void {
               · 失衡 {{ imbalancedCountOf(station.id) }}
             </span>
             <span>· 待复核 {{ pendingReviewOf(station.id) }}</span>
+          </div>
+          <div v-if="checkOf(station.id)" class="card-list-item__meta capacity-chip">
+            <template v-if="checkOf(station.id)?.checkable">
+              <span>容量校核：</span>
+              <t-tag
+                size="small"
+                :theme="capacityTheme(checkOf(station.id)?.status ?? null)"
+                variant="light"
+              >
+                {{ checkOf(station.id)?.status }}
+              </t-tag>
+              <span>
+                阀门合计 {{ flowText(checkOf(station.id)?.stationValveTotalM3h ?? 0) }} /
+                站能力 {{ flowText(station.designFlowM3h) }}
+              </span>
+              <span
+                v-if="checkOf(station.id)?.status === '超配'"
+                :style="{ color: '#c0392b', fontWeight: 600 }"
+              >
+                ⚠ 超配 {{ excessText(checkOf(station.id)?.stationExcessM3h ?? 0) }} m³/h
+                （{{ excessPct(checkOf(station.id)?.stationExcessM3h ?? 0, station.designFlowM3h) }}%）
+              </span>
+            </template>
+            <t-tag v-else size="small" theme="default" variant="light">容量不可校核</t-tag>
+            <span class="muted">{{ checkOf(station.id)?.skipReason }}</span>
           </div>
           <div class="card-list-item__meta" style="gap: 8px">
             <t-button size="small" variant="text" theme="primary" @click.stop="openEditStation(station)">
@@ -369,6 +446,27 @@ function goValves(stationId: string): void {
           <template #valveCountCell="{ row }">
             {{ valveStore.valves.filter((valve) => valve.buildingId === row.id).length }}
           </template>
+          <template #capacityCell="{ row }">
+            <template v-if="buildingCheckOf(row.stationId, row.id) as BuildingCapacityCheck">
+              <template
+                v-if="(buildingCheckOf(row.stationId, row.id) as BuildingCapacityCheck).participating"
+              >
+                <t-tag
+                  size="small"
+                  :theme="capacityTheme((buildingCheckOf(row.stationId, row.id) as BuildingCapacityCheck).status)"
+                  variant="light"
+                >
+                  {{ (buildingCheckOf(row.stationId, row.id) as BuildingCapacityCheck).status }}
+                </t-tag>
+                <span class="muted">
+                  {{ excessText((buildingCheckOf(row.stationId, row.id) as BuildingCapacityCheck).excessM3h) }}
+                </span>
+              </template>
+              <span v-else class="muted">
+                {{ (buildingCheckOf(row.stationId, row.id) as BuildingCapacityCheck).skipReason }}
+              </span>
+            </template>
+          </template>
           <template #opCell="{ row }">
             <div class="toolbar">
               <t-button size="small" variant="text" theme="primary" @click="openEditBuilding(row)">编辑</t-button>
@@ -377,6 +475,123 @@ function goValves(stationId: string): void {
             </div>
           </template>
         </t-table>
+      </div>
+    </div>
+
+    <div class="panel capacity-panel">
+      <div class="panel-head">
+        <h3 class="panel-title" style="margin: 0">换热站容量校核</h3>
+        <span class="muted">
+          校核口径以换热站设计流量为准：按楼栋建筑面积占比分摊站能力，再与该楼阀门设计流量合计比较；
+          阀门设计流量为现场参数原样保留，不反向覆盖站值
+        </span>
+      </div>
+
+      <EmptyPanel
+        v-if="stationChecks.length === 0"
+        title="还没有换热站"
+        description="新建换热站并登记楼栋、阀门后，将自动按面积分摊站设计流量并提示超配。"
+        action-text="新建换热站"
+        compact
+        @action="openCreateStation"
+      />
+
+      <div
+        v-for="check in stationChecks"
+        :key="check.stationId"
+        class="capacity-card"
+        :class="{ 'is-active': check.stationId === stationStore.currentStationId }"
+      >
+        <div class="capacity-card__head">
+          <div class="toolbar" style="gap: 10px">
+            <strong>{{ check.stationName }}</strong>
+            <t-tag
+              v-if="check.checkable"
+              size="small"
+              :theme="capacityTheme(check.status)"
+              variant="light"
+            >
+              整站{{ check.status }}
+            </t-tag>
+            <t-tag v-else size="small" theme="default" variant="light">不可校核</t-tag>
+          </div>
+          <div class="toolbar capacity-card__meta">
+            <span class="muted">站设计流量 {{ flowText(check.designFlowM3h) }} m³/h</span>
+            <span
+              v-if="check.checkable"
+              class="muted"
+            >参与分摊面积 {{ formatArea(check.participatingAreaM2) }}（{{ check.participatingBuildingCount }}/{{ check.buildingCount }} 栋）</span>
+            <span class="muted">阀门 {{ check.stationValveCount }} 只</span>
+            <span
+              v-if="check.checkable"
+              :style="{ color: check.status === '超配' ? '#c0392b' : undefined, fontWeight: check.status === '超配' ? 600 : 400 }"
+            >
+              阀门合计 {{ flowText(check.stationValveTotalM3h) }} m³/h，
+              {{ check.status === '超配' ? '超配' : check.status === '低配' ? '缺口' : '差额' }}
+              {{ excessText(check.stationExcessM3h) }}
+              m³/h（{{ excessPct(check.stationExcessM3h, check.designFlowM3h) }}%）
+            </span>
+          </div>
+        </div>
+
+        <t-alert
+          v-if="!check.checkable"
+          theme="warning"
+          :message="check.skipReason"
+          style="margin-bottom: 10px"
+        />
+        <t-alert
+          v-else-if="check.status === '超配'"
+          theme="error"
+          :message="`站内阀门设计流量合计超出站能力 ${excessText(check.stationExcessM3h)} m³/h，扩容登记后已无上限余量，请复核阀门配置或站设计流量。`"
+          style="margin-bottom: 10px"
+        />
+
+        <t-table
+          :data="check.rows"
+          :columns="capacityColumns"
+          :row-key="capacityRowKey"
+          :row-class-name="capacityRowClassName"
+          bordered
+          stripe
+          size="small"
+        >
+          <template #capacityAreaCell="{ row }">{{ formatArea(row.areaM2) }}</template>
+          <template #capacityShareCell="{ row }">
+            <span v-if="row.participating">{{ row.areaSharePct.toFixed(2) }}%</span>
+            <span v-else class="muted">—</span>
+          </template>
+          <template #capacityAllocatedCell="{ row }">
+            <span v-if="row.participating">{{ flowText(row.allocatedFlowM3h) }}</span>
+            <span v-else class="muted">—</span>
+          </template>
+          <template #capacityValveCell="{ row }">
+            {{ flowText(row.valveTotalM3h) }}
+            <span class="muted">/ {{ row.valveCount }} 只</span>
+          </template>
+          <template #capacityExcessCell="{ row }">
+            <span
+              v-if="row.participating"
+              :style="{ color: row.status === '超配' ? '#c0392b' : row.status === '低配' ? '#2b6cb0' : undefined }"
+            >
+              {{ excessText(row.excessM3h) }}
+            </span>
+            <span v-else class="muted">—</span>
+          </template>
+          <template #capacityStatusCell="{ row }">
+            <t-tag v-if="row.status" size="small" :theme="capacityTheme(row.status)" variant="light">
+              {{ row.status }}
+            </t-tag>
+            <t-tag v-else size="small" theme="default" variant="light">不参与</t-tag>
+          </template>
+          <template #capacityReasonCell="{ row }">
+            <span class="muted">{{ row.skipReason || '—' }}</span>
+          </template>
+        </t-table>
+
+        <p v-if="check.checkable && skippedValveTotal(check) > 0" class="muted capacity-note">
+          注：未参与分摊楼栋下的阀门合计 {{ flowText(skippedValveTotal(check)) }} m³/h，已计入整站阀门合计，但不参与面积分摊比较。
+        </p>
       </div>
     </div>
 
@@ -443,3 +658,49 @@ function goValves(stationId: string): void {
     </t-dialog>
   </div>
 </template>
+
+<style scoped>
+.capacity-chip {
+  gap: 8px;
+  align-items: center;
+}
+
+.capacity-panel {
+  margin-top: 16px;
+}
+
+.capacity-card {
+  padding: 14px;
+  border: 1px solid var(--hg-line);
+  border-radius: 10px;
+  background: #fff;
+  margin-bottom: 14px;
+}
+
+.capacity-card.is-active {
+  border-color: var(--hg-accent);
+  box-shadow: 0 0 0 2px rgba(193, 68, 14, 0.12);
+}
+
+.capacity-card__head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+
+.capacity-card__meta {
+  gap: 10px;
+}
+
+.capacity-note {
+  margin: 8px 0 0;
+}
+
+:deep(.capacity-row--skip) {
+  color: var(--hg-ink-soft);
+  background: #faf7f2;
+}
+</style>
