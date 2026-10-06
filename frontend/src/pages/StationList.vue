@@ -14,6 +14,14 @@ import { useStationStore } from '@/stores/stationStore'
 import { useValveStore } from '@/stores/valveStore'
 import { useAdjustStore } from '@/stores/adjustStore'
 import { useImbalanceRank } from '@/hooks/useImbalanceRank'
+import { useCapacityCheck } from '@/hooks/useCapacityCheck'
+import {
+  CAPACITY_MATCH_EPS,
+  type BuildingCapacityRow,
+  type BuildingCapacityStatus,
+  type StationCapacityReport,
+  type StationCapacityStatus
+} from '@/utils/capacity'
 import {
   EMPTY_BUILDING_DRAFT,
   HEAT_MODES,
@@ -30,6 +38,7 @@ const stationStore = useStationStore()
 const valveStore = useValveStore()
 const adjustStore = useAdjustStore()
 const rank = useImbalanceRank()
+const capacity = useCapacityCheck()
 
 /* ------------------------------ 派生 ------------------------------ */
 
@@ -45,6 +54,61 @@ const pendingReviewOf = (stationId: string): number =>
     const valve = valveStore.valves.find((item) => item.id === adjust.valveId)
     return valve ? valve.stationId === stationId : false
   }).length
+
+/* ---------------------------- 容量校核派生 ---------------------------- */
+
+const currentCapacity = computed<StationCapacityReport | null>(() =>
+  stationStore.currentStationId ? capacity.reportOf(stationStore.currentStationId) : null
+)
+
+const BUILDING_CAPACITY_THEME: Record<BuildingCapacityStatus, 'success' | 'danger' | 'primary' | 'default'> = {
+  匹配: 'success',
+  超配: 'danger',
+  余量: 'primary',
+  不参与: 'default'
+}
+
+const STATION_CAPACITY_THEME: Record<StationCapacityStatus, 'success' | 'danger' | 'primary' | 'warning'> = {
+  匹配: 'success',
+  超配: 'danger',
+  余量: 'primary',
+  不校核: 'warning'
+}
+
+function diffColor(diff: number | null): string | undefined {
+  if (diff === null) return undefined
+  if (diff > CAPACITY_MATCH_EPS) return '#c0392b'
+  if (diff < -CAPACITY_MATCH_EPS) return '#2b6cb0'
+  return undefined
+}
+
+function formatSignedFlow(diff: number | null): string {
+  if (diff === null) return '—'
+  const sign = diff > 0 ? '+' : ''
+  return `${sign}${diff.toFixed(1)} m³/h`
+}
+
+function formatSignedPct(diff: number | null): string {
+  if (diff === null) return '—'
+  const sign = diff > 0 ? '+' : ''
+  return `${sign}${diff.toFixed(1)}%`
+}
+
+const capacityColumns = [
+  { colKey: 'name', title: '楼栋', width: 130 },
+  { colKey: 'area', title: '建筑面积', width: 110 },
+  { colKey: 'areaShare', title: '面积占比', width: 90 },
+  { colKey: 'valves', title: '阀门(只)', width: 80 },
+  { colKey: 'valveFlow', title: '阀门设计合计', width: 120 },
+  { colKey: 'allocated', title: '站值分摊', width: 110 },
+  { colKey: 'diff', title: '超配差值', width: 110 },
+  { colKey: 'diffPct', title: '超配比例', width: 100 },
+  { colKey: 'status', title: '校核结论', width: 200 }
+]
+
+function capacityRowKey(row: BuildingCapacityRow): string {
+  return row.building.id
+}
 
 const stationColumns = [
   { colKey: 'name', title: '楼栋', width: 140 },
@@ -250,6 +314,12 @@ function goValves(stationId: string): void {
       <StatBadge label="楼栋" :value="stationStore.buildings.length" suffix="栋" tone="info" />
       <StatBadge label="阀门" :value="valveStore.valves.length" suffix="只" tone="default" />
       <StatBadge
+        label="容量超配站"
+        :value="capacity.overStationCount.value"
+        suffix="座"
+        tone="danger"
+      />
+      <StatBadge
         label="严重失衡占比"
         :value="rank.summary.value.severe"
         :percent="rank.summary.value.severePercent"
@@ -285,7 +355,17 @@ function goValves(stationId: string): void {
         >
           <div class="card-list-item__head">
             <span>{{ station.name }}</span>
-            <t-tag size="small" variant="light" theme="primary">{{ station.commissionYear }} 年投运</t-tag>
+            <span class="toolbar" style="gap: 4px">
+              <t-tag
+                v-if="capacity.reportOf(station.id)?.status === '超配'"
+                size="small"
+                theme="danger"
+                variant="light"
+              >
+                容量超配
+              </t-tag>
+              <t-tag size="small" variant="light" theme="primary">{{ station.commissionYear }} 年投运</t-tag>
+            </span>
           </div>
           <div class="card-list-item__meta">
             <span>{{ formatArea(station.heatAreaM2) }}</span>
@@ -380,6 +460,107 @@ function goValves(stationId: string): void {
       </div>
     </div>
 
+    <div class="panel capacity-panel">
+      <div class="panel-head">
+        <h3 class="panel-title" style="margin: 0">
+          容量校核
+          <span v-if="stationStore.currentStation" class="muted">· {{ stationStore.currentStation.name }}</span>
+          <t-tag
+            v-if="currentCapacity"
+            size="small"
+            :theme="STATION_CAPACITY_THEME[currentCapacity.status]"
+            variant="light"
+            style="margin-left: 8px"
+          >
+            整站{{ currentCapacity.status }}
+          </t-tag>
+        </h3>
+        <span class="muted">
+          校核口径：站设计流量按建筑面积占比分摊到楼，再与该楼阀门设计流量合计比较；阀门原设计流量只读保留
+        </span>
+      </div>
+
+      <EmptyPanel
+        v-if="!currentCapacity"
+        title="请先选择换热站"
+        description="在左侧选择一座换热站后，按楼栋面积占比分摊站设计流量并校核阀门合计。"
+        compact
+      />
+
+      <template v-else>
+        <t-alert
+          v-if="currentCapacity.status === '不校核'"
+          theme="warning"
+          :message="currentCapacity.skipReason ?? '该站不参与容量校核'"
+          style="margin-bottom: 12px"
+        />
+
+        <div class="capacity-summary">
+          <div class="capacity-summary__item">
+            <span class="muted">站设计流量（校核上限）</span>
+            <strong>{{ formatFlow(currentCapacity.stationDesignFlow) }}</strong>
+          </div>
+          <div class="capacity-summary__item">
+            <span class="muted">参与楼栋阀门设计合计</span>
+            <strong :style="{ color: diffColor(currentCapacity.stationFlowDiff) }">
+              {{ currentCapacity.status === '不校核' ? '—' : formatFlow(currentCapacity.participatingValveFlow) }}
+            </strong>
+          </div>
+          <div class="capacity-summary__item">
+            <span class="muted">合计差值 / 比例</span>
+            <strong :style="{ color: diffColor(currentCapacity.stationFlowDiff) }">
+              {{ formatSignedFlow(currentCapacity.stationFlowDiff) }}
+              <em class="muted">（{{ formatSignedPct(currentCapacity.stationDiffPct) }}）</em>
+            </strong>
+          </div>
+          <div class="capacity-summary__item">
+            <span class="muted">分摊面积 / 楼栋</span>
+            <strong>
+              {{ formatArea(currentCapacity.participatingArea) }}
+              <em class="muted">· {{ currentCapacity.participatingCount }} 栋参与 / {{ currentCapacity.skippedCount }} 栋不参与</em>
+            </strong>
+          </div>
+          <div class="capacity-summary__item">
+            <span class="muted">超配楼栋</span>
+            <strong :style="{ color: currentCapacity.overCount > 0 ? '#c0392b' : undefined }">
+              {{ currentCapacity.overCount }} 栋
+            </strong>
+          </div>
+        </div>
+
+        <t-table
+          :data="currentCapacity.rows"
+          :columns="capacityColumns"
+          :row-key="capacityRowKey"
+          bordered
+          stripe
+          size="small"
+        >
+          <template #areaCell="{ row }">{{ formatArea(row.building.areaM2) }}</template>
+          <template #areaShareCell="{ row }">{{ row.participating ? `${row.areaSharePct.toFixed(1)}%` : '—' }}</template>
+          <template #valvesCell="{ row }">{{ row.valveCount }}</template>
+          <template #valveFlowCell="{ row }">{{ formatFlow(row.valveFlowTotal) }}</template>
+          <template #allocatedCell="{ row }">
+            {{ row.allocatedFlow === null ? '—' : formatFlow(row.allocatedFlow) }}
+          </template>
+          <template #diffCell="{ row }">
+            <span :style="{ color: diffColor(row.flowDiff) }">{{ formatSignedFlow(row.flowDiff) }}</span>
+          </template>
+          <template #diffPctCell="{ row }">
+            <span :style="{ color: diffColor(row.flowDiff) }">{{ formatSignedPct(row.diffPct) }}</span>
+          </template>
+          <template #statusCell="{ row }">
+            <span class="toolbar">
+              <t-tag size="small" :theme="BUILDING_CAPACITY_THEME[row.status as BuildingCapacityStatus]" :variant="row.status === '不参与' ? 'outline' : 'light'">
+                {{ row.status }}
+              </t-tag>
+              <span v-if="row.skipReason" class="muted">{{ row.skipReason }}</span>
+            </span>
+          </template>
+        </t-table>
+      </template>
+    </div>
+
     <t-dialog
       v-model:visible="stationDialogVisible"
       :header="stationDialogTitle"
@@ -443,3 +624,35 @@ function goValves(stationId: string): void {
     </t-dialog>
   </div>
 </template>
+
+<style scoped>
+.capacity-panel {
+  margin-top: 16px;
+}
+
+.capacity-summary {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+
+.capacity-summary__item {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 180px;
+  padding: 10px 12px;
+  border: 1px solid var(--hg-line);
+  border-radius: 10px;
+  background: #fff;
+  font-size: 13px;
+}
+
+.capacity-summary__item strong {
+  font-size: 16px;
+  font-weight: 700;
+  color: var(--hg-ink);
+  font-variant-numeric: tabular-nums;
+}
+</style>
